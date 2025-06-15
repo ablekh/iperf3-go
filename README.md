@@ -223,10 +223,10 @@ Connecting to host 192.168.1.1, port 5201
 
 ## Current Limitations
 
-- UDP testing is not yet implemented
-- Some advanced features may not be fully supported
+- Some advanced iperf3 features may not be fully supported
 - CPU utilization reporting is basic
-- Reverse mode testing needs refinement
+- SCTP support requires Linux kernel support (not available on Windows/macOS)
+- Advanced UDP features like jitter measurement could be enhanced
 
 ## Architecture
 
@@ -261,12 +261,14 @@ To test the server:
 
 ## Contributing
 
-This is a basic implementation that covers the core iperf3 server functionality. Contributions are welcome to add:
-- UDP support
-- Additional protocol features
+This implementation now provides comprehensive iperf3 functionality with TCP, UDP, and SCTP support. Contributions are welcome to add:
+- Advanced UDP features (jitter measurement, packet loss statistics)
+- Additional iperf3 protocol features
 - Performance optimizations
-- Better error handling
-- Reverse mode improvements
+- Enhanced error handling and diagnostics
+- Improved reverse mode functionality
+- Better CPU utilization reporting
+- Additional platform-specific optimizations
 
 ## License
 
