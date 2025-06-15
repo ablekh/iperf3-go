@@ -3,10 +3,13 @@ package client
 import (
 	"encoding/json"
 	"fmt"
-	"iperf3-go/internal/protocol"
 	"log"
 	"net"
 	"time"
+
+	"iperf3-go/internal/protocol"
+
+	"github.com/ishidawataru/sctp"
 )
 
 // Config holds client configuration
@@ -57,8 +60,10 @@ func (c *Client) Run() error {
 	case "udp":
 		conn, err = net.Dial("udp", addr)
 	case "sctp":
-		// SCTP support would require additional libraries
-		return fmt.Errorf("SCTP protocol not yet implemented")
+		conn, err = sctp.DialSCTP("sctp", nil, &sctp.SCTPAddr{
+			IPAddrs: []net.IPAddr{{IP: net.ParseIP(c.config.Host)}},
+			Port:    c.config.Port,
+		})
 	default: // tcp
 		conn, err = net.Dial("tcp", addr)
 	}

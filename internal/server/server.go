@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"iperf3-go/internal/protocol"
+
+	"github.com/ishidawataru/sctp"
 )
 
 // Config holds server configuration
@@ -62,7 +64,7 @@ func (s *Server) Start() error {
 	case "udp":
 		return s.startUDPServer(addr)
 	case "sctp":
-		return fmt.Errorf("SCTP protocol not yet implemented")
+		return s.startSCTPServer(addr)
 	default: // tcp
 		return s.startTCPServer(addr)
 	}
@@ -125,6 +127,40 @@ func (s *Server) startUDPServer(addr string) error {
 
 		// Handle UDP packet in a goroutine
 		go s.handleUDPPacket(conn, clientAddr, buffer[:n])
+
+		if s.config.OneOff {
+			break
+		}
+	}
+
+	return nil
+}
+
+// startSCTPServer starts an SCTP server
+func (s *Server) startSCTPServer(addr string) error {
+	sctpAddr, err := sctp.ResolveSCTPAddr("sctp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to resolve SCTP address %s: %w", addr, err)
+	}
+
+	listener, err := sctp.ListenSCTP("sctp", sctpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on SCTP %s: %w", addr, err)
+	}
+	defer listener.Close()
+
+	if s.config.Verbose {
+		log.Printf("SCTP Server listening on %s", addr)
+	}
+
+	for {
+		conn, err := listener.AcceptSCTP()
+		if err != nil {
+			log.Printf("Failed to accept SCTP connection: %v", err)
+			continue
+		}
+
+		go s.handleConnection(conn)
 
 		if s.config.OneOff {
 			break

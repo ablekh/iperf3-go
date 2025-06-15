@@ -5,9 +5,10 @@ A complete Go implementation of iperf3 with both client and server functionality
 ## Features
 
 - **Complete iperf3 implementation** - Both client and server modes
-- **Multiple protocol support** - TCP, UDP, and SCTP (SCTP in development)
+- **Multiple protocol support** - TCP, UDP, and SCTP (Linux only)
 - **TCP performance testing** with accurate measurements
-- **UDP performance testing** with bandwidth control and packet loss detection
+- **UDP performance testing** with bandwidth control and packet rate limiting
+- **SCTP performance testing** with multi-stream support (Linux only)
 - **Full compatibility** with standard iperf3 clients and servers
 - **JSON output format** matching iperf3 specification
 - **Real-time interval reporting** during tests
@@ -134,16 +135,23 @@ UDP test with custom packet size:
 ./iperf3-go -c <server-ip> -u -l 1470
 ```
 
-### SCTP Mode (In Development)
+### SCTP Mode
 
-SCTP server:
+**Note**: SCTP requires Linux kernel support and is not available on Windows or macOS.
+
+SCTP server (Linux only):
 ```bash
 ./iperf3-go -sctp -v
 ```
 
-SCTP client test:
+SCTP client test (Linux only):
 ```bash
 ./iperf3-go -c <server-ip> -sctp
+```
+
+SCTP test with multiple streams:
+```bash
+./iperf3-go -c <server-ip> -sctp -P 4
 ```
 
 ### Testing with Standard iperf3
@@ -177,7 +185,7 @@ iperf3 -s &
 - `-l <length>`: Length of buffer to read or write (default: 128KB)
 - `-b <bandwidth>`: Target bandwidth in bits/sec (0 for unlimited)
 - `-u`: Use UDP rather than TCP
-- `-sctp`: Use SCTP rather than TCP (in development)
+- `-sctp`: Use SCTP rather than TCP (Linux only)
 
 ### Server Mode Options
 - `-B <host>`: Bind to a specific interface
