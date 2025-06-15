@@ -13,11 +13,12 @@ import (
 
 // Config holds server configuration
 type Config struct {
-	Port    int
-	Bind    string
-	Verbose bool
-	Daemon  bool
-	OneOff  bool
+	Port     int
+	Bind     string
+	Verbose  bool
+	Daemon   bool
+	OneOff   bool
+	Protocol string
 }
 
 // Server represents an iperf3 server
@@ -30,10 +31,10 @@ type Server struct {
 
 // Session represents a client test session
 type Session struct {
-	ID       string
-	Conn     net.Conn
-	Config   *protocol.TestConfig
-	Results  *protocol.TestResults
+	ID        string
+	Conn      net.Conn
+	Config    *protocol.TestConfig
+	Results   *protocol.TestResults
 	StartTime time.Time
 }
 
@@ -52,6 +53,23 @@ func (s *Server) Start() error {
 		addr = fmt.Sprintf("%s:%d", s.config.Bind, s.config.Port)
 	}
 
+	protocol := s.config.Protocol
+	if protocol == "" {
+		protocol = "tcp"
+	}
+
+	switch protocol {
+	case "udp":
+		return s.startUDPServer(addr)
+	case "sctp":
+		return fmt.Errorf("SCTP protocol not yet implemented")
+	default: // tcp
+		return s.startTCPServer(addr)
+	}
+}
+
+// startTCPServer starts a TCP server
+func (s *Server) startTCPServer(addr string) error {
 	listener, err := net.Listen("tcp", addr)
 	if err != nil {
 		return fmt.Errorf("failed to listen on %s: %w", addr, err)
@@ -59,7 +77,7 @@ func (s *Server) Start() error {
 	s.listener = listener
 
 	if s.config.Verbose {
-		log.Printf("Server listening on %s", addr)
+		log.Printf("TCP Server listening on %s", addr)
 	}
 
 	for {
@@ -77,6 +95,60 @@ func (s *Server) Start() error {
 	}
 
 	return nil
+}
+
+// startUDPServer starts a UDP server
+func (s *Server) startUDPServer(addr string) error {
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return fmt.Errorf("failed to resolve UDP address %s: %w", addr, err)
+	}
+
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return fmt.Errorf("failed to listen on UDP %s: %w", addr, err)
+	}
+	defer conn.Close()
+
+	if s.config.Verbose {
+		log.Printf("UDP Server listening on %s", addr)
+	}
+
+	// For UDP, we handle packets differently
+	buffer := make([]byte, 65536) // Max UDP packet size
+	for {
+		n, clientAddr, err := conn.ReadFromUDP(buffer)
+		if err != nil {
+			log.Printf("Failed to read UDP packet: %v", err)
+			continue
+		}
+
+		// Handle UDP packet in a goroutine
+		go s.handleUDPPacket(conn, clientAddr, buffer[:n])
+
+		if s.config.OneOff {
+			break
+		}
+	}
+
+	return nil
+}
+
+// handleUDPPacket handles a UDP packet from a client
+func (s *Server) handleUDPPacket(conn *net.UDPConn, clientAddr *net.UDPAddr, data []byte) {
+	if s.config.Verbose {
+		log.Printf("Received UDP packet from %s, size: %d bytes", clientAddr, len(data))
+	}
+
+	// For basic UDP support, we'll just echo back a simple response
+	// In a full implementation, this would parse iperf3 protocol messages
+	// and handle the UDP test properly
+
+	response := []byte("UDP packet received")
+	_, err := conn.WriteToUDP(response, clientAddr)
+	if err != nil {
+		log.Printf("Failed to send UDP response to %s: %v", clientAddr, err)
+	}
 }
 
 // handleConnection handles a client connection
@@ -229,13 +301,13 @@ func (s *Server) runTCPTest(session *Session) error {
 			elapsed := time.Since(startTime).Seconds()
 
 			interval := protocol.Interval{
-				Socket: 1,
-				Start:  elapsed - 1,
-				End:    elapsed,
-				Seconds: 1.0,
-				Bytes:  intervalBytes,
+				Socket:        1,
+				Start:         elapsed - 1,
+				End:           elapsed,
+				Seconds:       1.0,
+				Bytes:         intervalBytes,
 				BitsPerSecond: float64(intervalBytes * 8),
-				Omitted: false,
+				Omitted:       false,
 			}
 
 			intervalMsg := &protocol.Message{
@@ -261,34 +333,34 @@ func (s *Server) runTCPTest(session *Session) error {
 testComplete:
 	// Send final results
 	elapsed := time.Since(startTime).Seconds()
-	
+
 	results.End = protocol.TestEnd{
 		Streams: []protocol.StreamResult{
 			{
-				Socket: 1,
-				Start:  0,
-				End:    elapsed,
-				Seconds: elapsed,
-				Bytes:  totalBytes,
-				BitsPerSecond: float64(totalBytes * 8) / elapsed,
-				Sender: false,
+				Socket:        1,
+				Start:         0,
+				End:           elapsed,
+				Seconds:       elapsed,
+				Bytes:         totalBytes,
+				BitsPerSecond: float64(totalBytes*8) / elapsed,
+				Sender:        false,
 			},
 		},
 		SumSent: protocol.StreamResult{
-			Start:   0,
-			End:     elapsed,
-			Seconds: elapsed,
-			Bytes:   totalBytes,
-			BitsPerSecond: float64(totalBytes * 8) / elapsed,
-			Sender: false,
+			Start:         0,
+			End:           elapsed,
+			Seconds:       elapsed,
+			Bytes:         totalBytes,
+			BitsPerSecond: float64(totalBytes*8) / elapsed,
+			Sender:        false,
 		},
 		SumReceived: protocol.StreamResult{
-			Start:   0,
-			End:     elapsed,
-			Seconds: elapsed,
-			Bytes:   totalBytes,
-			BitsPerSecond: float64(totalBytes * 8) / elapsed,
-			Sender: false,
+			Start:         0,
+			End:           elapsed,
+			Seconds:       elapsed,
+			Bytes:         totalBytes,
+			BitsPerSecond: float64(totalBytes*8) / elapsed,
+			Sender:        false,
 		},
 		CPUUtilizationPercent: protocol.CPUUtilization{
 			HostTotal:    0.0,

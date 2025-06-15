@@ -26,6 +26,8 @@ func main() {
 		window     = flag.Int("w", 0, "window size / socket buffer size")
 		length     = flag.Int("l", 128*1024, "length of buffer to read or write (default 128 KB)")
 		bandwidth  = flag.Int64("b", 0, "target bandwidth in bits/sec (0 for unlimited)")
+		udp        = flag.Bool("u", false, "use UDP rather than TCP")
+		sctp       = flag.Bool("sctp", false, "use SCTP rather than TCP")
 
 		// Server flags
 		bind   = flag.String("B", "", "bind to a specific interface")
@@ -42,6 +44,14 @@ func main() {
 
 	// Check if running in client mode
 	if *clientMode != "" {
+		// Determine protocol
+		protocol := "tcp"
+		if *udp {
+			protocol = "udp"
+		} else if *sctp {
+			protocol = "sctp"
+		}
+
 		// Client mode
 		clientConfig := &client.Config{
 			Host:      *clientMode,
@@ -54,6 +64,7 @@ func main() {
 			Window:    *window,
 			Length:    *length,
 			Bandwidth: *bandwidth,
+			Protocol:  protocol,
 		}
 
 		c := client.New(clientConfig)
@@ -62,12 +73,21 @@ func main() {
 		}
 	} else {
 		// Server mode (default)
+		// Determine protocol for server
+		serverProtocol := "tcp"
+		if *udp {
+			serverProtocol = "udp"
+		} else if *sctp {
+			serverProtocol = "sctp"
+		}
+
 		serverConfig := &server.Config{
-			Port:    *port,
-			Bind:    *bind,
-			Verbose: *verbose,
-			Daemon:  *daemon,
-			OneOff:  *oneOff,
+			Port:     *port,
+			Bind:     *bind,
+			Verbose:  *verbose,
+			Daemon:   *daemon,
+			OneOff:   *oneOff,
+			Protocol: serverProtocol,
 		}
 
 		srv := server.New(serverConfig)

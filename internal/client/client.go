@@ -3,11 +3,10 @@ package client
 import (
 	"encoding/json"
 	"fmt"
+	"iperf3-go/internal/protocol"
 	"log"
 	"net"
 	"time"
-
-	"iperf3-go/internal/protocol"
 )
 
 // Config holds client configuration
@@ -22,6 +21,7 @@ type Config struct {
 	Window    int
 	Length    int
 	Bandwidth int64
+	Protocol  string
 }
 
 // Client represents an iperf3 client
@@ -42,9 +42,27 @@ func (c *Client) Run() error {
 		log.Printf("Connecting to host %s, port %d", c.config.Host, c.config.Port)
 	}
 
+	// Determine protocol type
+	protocolType := c.config.Protocol
+	if protocolType == "" {
+		protocolType = "tcp"
+	}
+
 	// Connect to server
 	addr := fmt.Sprintf("%s:%d", c.config.Host, c.config.Port)
-	conn, err := net.Dial("tcp", addr)
+	var conn net.Conn
+	var err error
+
+	switch protocolType {
+	case "udp":
+		conn, err = net.Dial("udp", addr)
+	case "sctp":
+		// SCTP support would require additional libraries
+		return fmt.Errorf("SCTP protocol not yet implemented")
+	default: // tcp
+		conn, err = net.Dial("tcp", addr)
+	}
+
 	if err != nil {
 		return fmt.Errorf("failed to connect to %s: %w", addr, err)
 	}
@@ -56,7 +74,7 @@ func (c *Client) Run() error {
 
 	// Send test configuration
 	testConfig := &protocol.TestConfig{
-		Protocol:  "tcp",
+		Protocol:  protocolType,
 		Time:      c.config.Time,
 		Parallel:  c.config.Parallel,
 		Reverse:   c.config.Reverse,
@@ -94,11 +112,11 @@ func (c *Client) Run() error {
 	}
 
 	// Run the test
-	return c.runTest(conn)
+	return c.runTest(conn, protocolType)
 }
 
 // runTest runs the actual performance test
-func (c *Client) runTest(conn net.Conn) error {
+func (c *Client) runTest(conn net.Conn, protocolType string) error {
 	duration := time.Duration(c.config.Time) * time.Second
 	if duration == 0 {
 		duration = 10 * time.Second // default
@@ -114,11 +132,19 @@ func (c *Client) runTest(conn net.Conn) error {
 	}
 
 	if !c.config.JSON {
-		fmt.Printf("Connecting to host %s, port %d\n", c.config.Host, c.config.Port)
-		fmt.Printf("[  4] local %s port %d connected to %s port %d\n",
-			conn.LocalAddr().String(), getPort(conn.LocalAddr()),
-			conn.RemoteAddr().String(), getPort(conn.RemoteAddr()))
-		fmt.Printf("[ ID] Interval           Transfer     Bitrate\n")
+		if protocolType == "udp" {
+			fmt.Printf("Connecting to host %s, port %d\n", c.config.Host, c.config.Port)
+			fmt.Printf("[  4] local %s port %d connected to %s port %d\n",
+				conn.LocalAddr().String(), getPort(conn.LocalAddr()),
+				conn.RemoteAddr().String(), getPort(conn.RemoteAddr()))
+			fmt.Printf("[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams\n")
+		} else {
+			fmt.Printf("Connecting to host %s, port %d\n", c.config.Host, c.config.Port)
+			fmt.Printf("[  4] local %s port %d connected to %s port %d\n",
+				conn.LocalAddr().String(), getPort(conn.LocalAddr()),
+				conn.RemoteAddr().String(), getPort(conn.RemoteAddr()))
+			fmt.Printf("[ ID] Interval           Transfer     Bitrate\n")
+		}
 	}
 
 	// Send data and collect interval results
@@ -130,13 +156,46 @@ func (c *Client) runTest(conn net.Conn) error {
 
 	// Start sending data in a goroutine
 	go func() {
-		for time.Since(startTime) < duration {
-			n, err := conn.Write(buffer)
-			if err != nil {
-				return
+		if protocolType == "udp" {
+			// For UDP, send packets at controlled rate
+			packetSize := c.config.Length
+			if packetSize == 0 {
+				packetSize = 1470 // Default UDP payload size
 			}
-			totalBytes += int64(n)
-			intervalBytes += int64(n)
+			udpBuffer := make([]byte, packetSize)
+			copy(udpBuffer, buffer[:min(len(buffer), packetSize)])
+
+			// Calculate target rate
+			targetBandwidth := c.config.Bandwidth
+			if targetBandwidth == 0 {
+				targetBandwidth = 1000000 // 1 Mbps default for UDP
+			}
+
+			packetInterval := time.Duration(float64(packetSize*8) / float64(targetBandwidth) * float64(time.Second))
+			ticker := time.NewTicker(packetInterval)
+			defer ticker.Stop()
+
+			for time.Since(startTime) < duration {
+				select {
+				case <-ticker.C:
+					n, err := conn.Write(udpBuffer)
+					if err != nil {
+						return
+					}
+					totalBytes += int64(n)
+					intervalBytes += int64(n)
+				}
+			}
+		} else {
+			// TCP - send as fast as possible
+			for time.Since(startTime) < duration {
+				n, err := conn.Write(buffer)
+				if err != nil {
+					return
+				}
+				totalBytes += int64(n)
+				intervalBytes += int64(n)
+			}
 		}
 	}()
 
@@ -244,5 +303,16 @@ func getPort(addr net.Addr) int {
 	if tcpAddr, ok := addr.(*net.TCPAddr); ok {
 		return tcpAddr.Port
 	}
+	if udpAddr, ok := addr.(*net.UDPAddr); ok {
+		return udpAddr.Port
+	}
 	return 0
+}
+
+// Helper function to get minimum of two integers
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
