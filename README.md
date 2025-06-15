@@ -183,4 +183,4 @@ This is a basic implementation that covers the core iperf3 server functionality.
 
 ## License
 
-This project is provided as-is for educational and testing purposes.
+This project is licensed under the terms of the MIT license.
