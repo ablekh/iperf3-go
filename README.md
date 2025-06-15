@@ -262,8 +262,7 @@ To test the server:
 ## Contributing
 
 This implementation now provides comprehensive iperf3 functionality with TCP, UDP, and SCTP support. Contributions are welcome to add:
-- Advanced UDP features (jitter measurement, packet loss statistics)
-- Additional iperf3 protocol features
+- Additional iperf3 protocol features (bidirectional tests, omit intervals, zerocopy)
 - Performance optimizations
 - Enhanced error handling and diagnostics
 - Improved reverse mode functionality
