@@ -1,15 +1,16 @@
 # iperf3-go
 
-A Go implementation of an iperf3 server that is compatible with the standard Linux iperf3 client.
+A complete Go implementation of iperf3 with both client and server functionality, fully compatible with the standard iperf3 tools.
 
 ## Features
 
-- TCP performance testing
-- Compatible with standard iperf3 clients
-- JSON output format matching iperf3
-- Configurable server options
-- Real-time interval reporting
-- Multiple client support
+- **Complete iperf3 implementation** - Both client and server modes
+- **TCP performance testing** with accurate measurements
+- **Full compatibility** with standard iperf3 clients and servers
+- **JSON output format** matching iperf3 specification
+- **Real-time interval reporting** during tests
+- **Multiple client support** for server mode
+- **Cross-platform** support (Windows, Linux, macOS)
 
 ## Prerequisites
 
@@ -72,38 +73,78 @@ Bind to specific interface:
 ./iperf3-go -B 192.168.1.100
 ```
 
-### Client Testing
+### Client Mode
 
-Use the standard iperf3 client to test against this server:
+Basic TCP test (10 seconds):
+```bash
+./iperf3-go -c <server-ip>
+```
+
+TCP test for 30 seconds:
+```bash
+./iperf3-go -c <server-ip> -t 30
+```
+
+TCP test with multiple parallel streams:
+```bash
+./iperf3-go -c <server-ip> -P 4
+```
+
+TCP test with specific window size:
+```bash
+./iperf3-go -c <server-ip> -w 65536
+```
+
+TCP reverse test (server sends data to client):
+```bash
+./iperf3-go -c <server-ip> -R
+```
+
+JSON output format:
+```bash
+./iperf3-go -c <server-ip> -J
+```
+
+Custom bandwidth limit:
+```bash
+./iperf3-go -c <server-ip> -b 100M
+```
+
+### Testing with Standard iperf3
+
+You can also test interoperability with standard iperf3:
 
 ```bash
-# Basic TCP test (10 seconds)
-iperf3 -c <server-ip>
+# Test iperf3-go server with standard iperf3 client
+./iperf3-go -v &
+iperf3 -c localhost -t 10
 
-# TCP test for 30 seconds
-iperf3 -c <server-ip> -t 30
-
-# TCP test with multiple parallel streams
-iperf3 -c <server-ip> -P 4
-
-# TCP test with specific window size
-iperf3 -c <server-ip> -w 64K
-
-# TCP reverse test (server sends data to client)
-iperf3 -c <server-ip> -R
-
-# JSON output format
-iperf3 -c <server-ip> -J
+# Test iperf3-go client with standard iperf3 server
+iperf3 -s &
+./iperf3-go -c localhost -t 10
 ```
 
 ## Command Line Options
 
-- `-p <port>`: Server port to listen on (default: 5201)
-- `-B <host>`: Bind to a specific interface
+### Common Options
+- `-p <port>`: Server port to listen on/connect to (default: 5201)
 - `-v`: Verbose output
+- `--version`: Show version information and quit
+
+### Client Mode Options
+- `-c <host>`: Run in client mode, connecting to `<host>`
+- `-t <time>`: Time in seconds to transmit for (default: 10)
+- `-P <streams>`: Number of parallel client streams to run (default: 1)
+- `-R`: Run in reverse mode (server sends, client receives)
+- `-J`: Output in JSON format
+- `-w <window>`: Window size / socket buffer size
+- `-l <length>`: Length of buffer to read or write (default: 128KB)
+- `-b <bandwidth>`: Target bandwidth in bits/sec (0 for unlimited)
+
+### Server Mode Options
+- `-B <host>`: Bind to a specific interface
 - `-D`: Run the server as a daemon
 - `-1`: Handle one client connection then exit
-- `--version`: Show version information and quit
 
 ## Protocol Compatibility
 
