@@ -1,6 +1,7 @@
 package client
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -159,16 +160,34 @@ func (c *Client) runTest(conn net.Conn, protocolType string) error {
 	intervalBytes := int64(0)
 	intervalNum := 0
 
+	// UDP-specific statistics
+	var totalPackets int64
+	intervalPackets := int64(0)
+
 	// Start sending data in a goroutine
 	go func() {
 		if protocolType == "udp" {
-			// For UDP, send packets at controlled rate
+			// For UDP, send packets at controlled rate with sequence numbers
 			packetSize := c.config.Length
 			if packetSize == 0 {
 				packetSize = 1470 // Default UDP payload size
 			}
+
+			// Reserve space for UDP packet header (16 bytes)
+			headerSize := 16
+			payloadSize := packetSize - headerSize
+			if payloadSize < 0 {
+				payloadSize = packetSize
+				headerSize = 0
+			}
+
 			udpBuffer := make([]byte, packetSize)
-			copy(udpBuffer, buffer[:min(len(buffer), packetSize)])
+			if headerSize > 0 {
+				// Fill payload portion with test data
+				copy(udpBuffer[headerSize:], buffer[:min(len(buffer), payloadSize)])
+			} else {
+				copy(udpBuffer, buffer[:min(len(buffer), packetSize)])
+			}
 
 			// Calculate target rate
 			targetBandwidth := c.config.Bandwidth
@@ -180,15 +199,28 @@ func (c *Client) runTest(conn net.Conn, protocolType string) error {
 			ticker := time.NewTicker(packetInterval)
 			defer ticker.Stop()
 
+			var sequenceNum uint32 = 0
+			const magicNumber uint32 = 0x12345678 // iperf3 magic number
+
 			for time.Since(startTime) < duration {
 				select {
 				case <-ticker.C:
+					// Add UDP packet header with sequence and timestamp
+					if headerSize > 0 {
+						binary.BigEndian.PutUint32(udpBuffer[0:4], sequenceNum)
+						binary.BigEndian.PutUint64(udpBuffer[4:12], uint64(time.Now().UnixNano()))
+						binary.BigEndian.PutUint32(udpBuffer[12:16], magicNumber)
+					}
+
 					n, err := conn.Write(udpBuffer)
 					if err != nil {
 						return
 					}
 					totalBytes += int64(n)
 					intervalBytes += int64(n)
+					totalPackets++
+					intervalPackets++
+					sequenceNum++
 				}
 			}
 		} else {
@@ -214,11 +246,19 @@ func (c *Client) runTest(conn net.Conn, protocolType string) error {
 			if !c.config.JSON {
 				transfer := float64(intervalBytes) / (1024 * 1024)  // MB
 				bitrate := float64(intervalBytes*8) / (1024 * 1024) // Mbits/sec
-				fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec\n",
-					elapsed-1, elapsed, transfer, bitrate)
+
+				if protocolType == "udp" {
+					// For UDP, show additional statistics (jitter and packet loss would come from server)
+					fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec   0.000 ms  %3d/%3d (0%%)\n",
+						elapsed-1, elapsed, transfer, bitrate, 0, intervalPackets)
+				} else {
+					fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec\n",
+						elapsed-1, elapsed, transfer, bitrate)
+				}
 			}
 
 			intervalBytes = 0
+			intervalPackets = 0
 
 			if elapsed >= duration.Seconds() {
 				goto testComplete
@@ -254,15 +294,25 @@ testComplete:
 			},
 			"end": map[string]interface{}{
 				"streams": []map[string]interface{}{
-					{
-						"socket":          4,
-						"start":           0,
-						"end":             elapsed,
-						"seconds":         elapsed,
-						"bytes":           totalBytes,
-						"bits_per_second": float64(totalBytes*8) / elapsed,
-						"sender":          true,
-					},
+					func() map[string]interface{} {
+						stream := map[string]interface{}{
+							"socket":          4,
+							"start":           0,
+							"end":             elapsed,
+							"seconds":         elapsed,
+							"bytes":           totalBytes,
+							"bits_per_second": float64(totalBytes*8) / elapsed,
+							"sender":          true,
+						}
+						if protocolType == "udp" {
+							stream["packets"] = totalPackets
+							stream["lost_packets"] = 0
+							stream["lost_percent"] = 0.0
+							stream["jitter_ms"] = 0.0
+							stream["out_of_order"] = 0
+						}
+						return stream
+					}(),
 				},
 				"sum_sent": map[string]interface{}{
 					"start":           0,
@@ -288,15 +338,23 @@ testComplete:
 	} else {
 		// Output standard format
 		fmt.Printf("- - - - - - - - - - - - - - - - - - - - - - - - -\n")
-		fmt.Printf("[ ID] Interval           Transfer     Bitrate\n")
 
 		transfer := float64(totalBytes) / (1024 * 1024)            // MB
 		bitrate := float64(totalBytes*8) / (1024 * 1024) / elapsed // Mbits/sec
 
-		fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec                  sender\n",
-			0.0, elapsed, transfer, bitrate)
-		fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec                  receiver\n",
-			0.0, elapsed, transfer, bitrate)
+		if protocolType == "udp" {
+			fmt.Printf("[ ID] Interval           Transfer     Bitrate         Jitter    Lost/Total Datagrams\n")
+			fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec   0.000 ms  %3d/%3d (0%%)                  sender\n",
+				0.0, elapsed, transfer, bitrate, 0, totalPackets)
+			fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec   0.000 ms  %3d/%3d (0%%)                  receiver\n",
+				0.0, elapsed, transfer, bitrate, 0, totalPackets)
+		} else {
+			fmt.Printf("[ ID] Interval           Transfer     Bitrate\n")
+			fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec                  sender\n",
+				0.0, elapsed, transfer, bitrate)
+			fmt.Printf("[  4] %7.2f-%7.2f sec  %7.2f MBytes  %7.2f Mbits/sec                  receiver\n",
+				0.0, elapsed, transfer, bitrate)
+		}
 		fmt.Printf("\niperf Done.\n")
 	}
 

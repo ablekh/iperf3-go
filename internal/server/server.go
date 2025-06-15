@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -25,10 +26,11 @@ type Config struct {
 
 // Server represents an iperf3 server
 type Server struct {
-	config   *Config
-	listener net.Listener
-	sessions map[string]*Session
-	mutex    sync.RWMutex
+	config      *Config
+	listener    net.Listener
+	sessions    map[string]*Session
+	udpSessions map[string]*protocol.UDPStats
+	mutex       sync.RWMutex
 }
 
 // Session represents a client test session
@@ -38,13 +40,15 @@ type Session struct {
 	Config    *protocol.TestConfig
 	Results   *protocol.TestResults
 	StartTime time.Time
+	UDPStats  *protocol.UDPStats
 }
 
 // New creates a new iperf3 server
 func New(config *Config) *Server {
 	return &Server{
-		config:   config,
-		sessions: make(map[string]*Session),
+		config:      config,
+		sessions:    make(map[string]*Session),
+		udpSessions: make(map[string]*protocol.UDPStats),
 	}
 }
 
@@ -170,17 +174,116 @@ func (s *Server) startSCTPServer(addr string) error {
 	return nil
 }
 
-// handleUDPPacket handles a UDP packet from a client
+// handleUDPPacket handles a UDP packet from a client with advanced statistics
 func (s *Server) handleUDPPacket(conn *net.UDPConn, clientAddr *net.UDPAddr, data []byte) {
 	if s.config.Verbose {
 		log.Printf("Received UDP packet from %s, size: %d bytes", clientAddr, len(data))
 	}
 
-	// For basic UDP support, we'll just echo back a simple response
-	// In a full implementation, this would parse iperf3 protocol messages
-	// and handle the UDP test properly
+	clientKey := clientAddr.String()
 
-	response := []byte("UDP packet received")
+	// Parse UDP packet header if present
+	if len(data) >= 16 {
+		// Extract packet header
+		sequence := binary.BigEndian.Uint32(data[0:4])
+		timestamp := int64(binary.BigEndian.Uint64(data[4:12]))
+		magic := binary.BigEndian.Uint32(data[12:16])
+
+		// Verify magic number
+		const expectedMagic uint32 = 0x12345678
+		if magic == expectedMagic {
+			// Calculate statistics
+			arrivalTime := time.Now().UnixNano()
+			transitTime := float64(arrivalTime-timestamp) / 1000000.0 // Convert to milliseconds
+
+			// Get or create UDP session stats
+			s.mutex.Lock()
+			stats, exists := s.udpSessions[clientKey]
+			if !exists {
+				stats = &protocol.UDPStats{
+					LastSequence: sequence - 1, // Initialize to expect this sequence
+				}
+				s.udpSessions[clientKey] = stats
+			}
+
+			// Update packet statistics
+			stats.TotalPackets++
+
+			// Check for packet loss (sequence gaps)
+			expectedSeq := stats.LastSequence + 1
+			if sequence > expectedSeq {
+				// Packets were lost
+				lostCount := int64(sequence - expectedSeq)
+				stats.LostPackets += lostCount
+				if s.config.Verbose {
+					log.Printf("Packet loss detected: expected seq %d, got %d (lost %d packets)",
+						expectedSeq, sequence, lostCount)
+				}
+			} else if sequence < expectedSeq {
+				// Out-of-order packet
+				stats.OutOfOrder++
+				if s.config.Verbose {
+					log.Printf("Out-of-order packet: expected seq %d, got %d", expectedSeq, sequence)
+				}
+			}
+
+			// Update sequence tracking
+			if sequence >= stats.LastSequence {
+				stats.LastSequence = sequence
+			}
+
+			// Calculate jitter using RFC 1889 algorithm
+			if stats.LastArrivalTime > 0 {
+				// Calculate transit time difference
+				transitDiff := transitTime - stats.LastTransitTime
+				if transitDiff < 0 {
+					transitDiff = -transitDiff
+				}
+
+				// Update jitter using exponential smoothing (RFC 1889)
+				// J(i) = J(i-1) + (|D(i-1,i)| - J(i-1))/16
+				if stats.JitterCount == 0 {
+					stats.JitterSum = transitDiff
+				} else {
+					currentJitter := stats.JitterSum / float64(stats.JitterCount)
+					newJitter := currentJitter + (transitDiff-currentJitter)/16.0
+					stats.JitterSum = newJitter * float64(stats.JitterCount+1)
+				}
+				stats.JitterCount++
+			}
+
+			// Update timing for next jitter calculation
+			stats.LastArrivalTime = arrivalTime
+			stats.LastTransitTime = transitTime
+
+			s.mutex.Unlock()
+
+			if s.config.Verbose {
+				lossPercent := 0.0
+				if stats.TotalPackets > 0 {
+					lossPercent = float64(stats.LostPackets) / float64(stats.TotalPackets+stats.LostPackets) * 100.0
+				}
+				jitter := 0.0
+				if stats.JitterCount > 0 {
+					jitter = stats.JitterSum / float64(stats.JitterCount)
+				}
+				log.Printf("UDP stats from %s: seq=%d, transit=%.2fms, loss=%.2f%%, jitter=%.2fms, ooo=%d",
+					clientAddr, sequence, transitTime, lossPercent, jitter, stats.OutOfOrder)
+			}
+
+			// Send acknowledgment with basic stats
+			response := fmt.Sprintf("UDP packet received: seq=%d, total=%d, lost=%d, ooo=%d",
+				sequence, stats.TotalPackets, stats.LostPackets, stats.OutOfOrder)
+			_, err := conn.WriteToUDP([]byte(response), clientAddr)
+			if err != nil {
+				log.Printf("Failed to send UDP response to %s: %v", clientAddr, err)
+			}
+			return
+		}
+	}
+
+	// Handle packets without proper header (legacy mode)
+	response := []byte("UDP packet received (legacy mode)")
 	_, err := conn.WriteToUDP(response, clientAddr)
 	if err != nil {
 		log.Printf("Failed to send UDP response to %s: %v", clientAddr, err)
@@ -421,6 +524,26 @@ func (s *Server) runUDPTest(session *Session) error {
 	// UDP test implementation would go here
 	// For now, return an error as it's not implemented
 	return fmt.Errorf("UDP tests not yet implemented")
+}
+
+// GetUDPStats returns UDP statistics for a client
+func (s *Server) GetUDPStats(clientAddr string) *protocol.UDPStats {
+	s.mutex.RLock()
+	defer s.mutex.RUnlock()
+
+	if stats, exists := s.udpSessions[clientAddr]; exists {
+		// Return a copy to avoid race conditions
+		statsCopy := *stats
+		return &statsCopy
+	}
+	return nil
+}
+
+// CleanupUDPSession removes UDP session statistics for a client
+func (s *Server) CleanupUDPSession(clientAddr string) {
+	s.mutex.Lock()
+	defer s.mutex.Unlock()
+	delete(s.udpSessions, clientAddr)
 }
 
 // Helper functions

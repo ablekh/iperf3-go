@@ -117,4 +117,29 @@ type Interval struct {
 	RTTVar        int     `json:"rttvar,omitempty"`
 	PMTU          int     `json:"pmtu,omitempty"`
 	Omitted       bool    `json:"omitted"`
+	// UDP-specific fields
+	Packets     int64   `json:"packets,omitempty"`
+	LostPackets int64   `json:"lost_packets,omitempty"`
+	LostPercent float64 `json:"lost_percent,omitempty"`
+	Jitter      float64 `json:"jitter_ms,omitempty"`
+	OutOfOrder  int64   `json:"out_of_order,omitempty"`
+}
+
+// UDPPacketHeader represents the header for UDP packets with sequence and timing info
+type UDPPacketHeader struct {
+	Sequence  uint32 `json:"sequence"`
+	Timestamp int64  `json:"timestamp"` // nanoseconds since epoch
+	Magic     uint32 `json:"magic"`     // Magic number to identify iperf3 packets
+}
+
+// UDPStats represents UDP-specific statistics
+type UDPStats struct {
+	TotalPackets    int64
+	LostPackets     int64
+	OutOfOrder      int64
+	LastSequence    uint32
+	JitterSum       float64
+	JitterCount     int64
+	LastArrivalTime int64
+	LastTransitTime float64
 }
